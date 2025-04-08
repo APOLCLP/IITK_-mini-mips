@@ -1,8 +1,8 @@
 `timescale 1ns / 1ps
 
+// Control Unit 
 module Giga_C(
     input  [5:0] opcode,
-    input  [5:0] funct,
     output reg [1:0] ALUOp,
     output reg ALUSrc,
     output reg RegWrite,
@@ -11,8 +11,8 @@ module Giga_C(
     output reg MemtoReg,
     output reg Branch,
     output reg Jump
-)   
-    // Control Unit 
+);   
+    
     initial begin
         ALUOp = 2'b00;
         ALUSrc = 0;
@@ -166,7 +166,14 @@ module Giga_C(
             
             default: begin
                 ALUOp = 2'b00; // Default case
+                ALUSrc = 0;
+                RegWrite = 0;
+                MemRead = 0;
+                MemWrite = 0;
+                MemtoReg = 0;
+                Branch = 0;
+                Jump = 0;
             end
         endcase
     end 
-endmodule
+endmodule;
