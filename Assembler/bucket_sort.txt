@@ -1,0 +1,200 @@
+	.data
+input:         .float 0.897, 0.565, 0.656, 0.1234, 0.665, 0.3434, 0.1126, 0.554, 0.3349, 0.678, 0.3656, 0.9989
+num_elements:  .word 12
+num_buckets:   .word 5
+
+# 5 buckets × max 12 floats × 4 bytes each
+buckets:       .space 5*12*4
+bucket_sizes:  .space 5*4
+
+newline:       .asciiz "\n"
+msg_sorted:    .asciiz "Sorted output:\n"
+
+	.text
+	.globl main
+main:
+    # init pointers & counts
+    la   $t0, input         # base of input[]
+    lw   $t1, num_elements  # p = 12
+    lw   $t2, num_buckets   # n = 5
+    la   $t3, buckets       # base of buckets[]
+    la   $t4, bucket_sizes  # base of bucket_sizes[]
+
+    # zero out bucket_sizes[0..n-1]
+    li   $t5, 0
+zero_loop:
+    beq  $t5, $t2, insert_loop
+    mul  $t6, $t5, 4
+    add  $t7, $t4, $t6
+    sw   $zero, 0($t7)
+    addi $t5, $t5, 1
+    j    zero_loop
+
+insert_loop:
+    li   $t5, 0
+next_insert:
+    beq  $t5, $t1, sort_buckets
+
+    # load arr[i] into FPU f0
+    mul  $t6, $t5, 4
+    add  $t7, $t0, $t6
+    lw   $t8, 0($t7)
+    mtc1 $t8, $f0           # f0 = arr[i]
+
+    # compute f2 = float(n)
+    mtc1 $t2, $f2           # f2 = n
+    cvt.s.w $f2, $f2        # convert to single
+
+    # f1 = f0 * f2
+    mul.s $f1, $f0, $f2
+
+    # index = int(f1)
+    cvt.w.s $f3, $f1        # convert to word
+    mfc1   $t9, $f3         # t9 = index
+
+    # clamp index to [0,n-1]
+    blt    $t9, $zero, set_zero
+    bge    $t9, $t2, set_max
+cont_idx:
+    # load size = bucket_sizes[index]
+    mul  $t6, $t9, 4
+    add  $t7, $t4, $t6
+    lw   $t5, 0($t7)
+
+    # compute bucket_base in $s0
+    mul  $t6, $t9, 48
+    add  $s0, $t3, $t6      # s0 = bucket_base
+
+    # compute slot_addr in $s1
+    mul  $t6, $t5, 4
+    add  $s1, $s0, $t6      # s1 = bucket_base + size*4
+
+    # store f0 into bucket: move to int then sw
+    mfc1 $s3, $f0           # s3 = float bits
+    sw   $s3, 0($s1)
+
+    # increment bucket_sizes[index]
+    addi $t5, $t5, 1
+    sw   $t5, 0($t7)
+
+    addi $t5, $t5, 1        # i++
+    j    next_insert
+
+set_zero:
+    li   $t9, 0
+    j    cont_idx
+set_max:
+    addi $t9, $t2, -1
+    j    cont_idx
+
+sort_buckets:
+    li   $t5, 0
+bucket_loop:
+    beq  $t5, $t2, merge
+
+    # load sz = bucket_sizes[t5]
+    mul  $t6, $t5, 4
+    add  $t7, $t4, $t6
+    lw   $t8, 0($t7)
+    beq  $t8, $zero, skip_sort
+
+    # a0 = bucket_base, a1 = sz
+    mul  $t9, $t5, 48
+    add  $a0, $t3, $t9
+    move $a1, $t8
+    jal  insertion_sort
+
+skip_sort:
+    addi $t5, $t5, 1
+    j    bucket_loop
+
+# insertion_sort(a0=base, a1=len)
+insertion_sort:
+    li   $t0, 1          # i = 1
+ins_i:
+    bge  $t0, $a1, ins_done
+
+    # key = A[i]
+    mul  $t1, $t0, 4
+    add  $t2, $a0, $t1
+    lw   $t3, 0($t2)
+    mtc1 $t3, $f2        # f2 = key
+
+    addi $t4, $t0, -1    # j = i-1
+ins_j:
+    bltz $t4, ins_place
+
+    # load A[j]
+    mul  $t5, $t4, 4
+    add  $t6, $a0, $t5
+    lw   $t7, 0($t6)
+    mtc1 $t7, $f3        # f3 = A[j]
+
+    # if (f3 <= f2) break
+    c.le.s $fcc0, $f3, $f2
+    bc1t  ins_place
+
+    # shift A[j] → A[j+1]
+    addi $t8, $t4, 1
+    mul  $t9, $t8, 4
+    add  $s2, $a0, $t9
+    mfc1 $s3, $f3      # s3 = bits
+    sw   $s3, 0($s2)
+    addi $t4, $t4, -1
+    j    ins_j
+
+ins_place:
+    addi $t8, $t4, 1
+    mul  $t9, $t8, 4
+    add  $s2, $a0, $t9
+    mfc1 $s3, $f2      # key bits
+    sw   $s3, 0($s2)
+
+    addi $t0, $t0, 1
+    j    ins_i
+
+ins_done:
+    jr   $ra
+
+merge:
+    # print header
+    li   $v0, 4
+    la   $a0, msg_sorted
+    syscall
+
+    li   $t5, 0
+print_b:
+    beq  $t5, $t2, end
+    mul  $t6, $t5, 4
+    add  $t7, $t4, $t6
+    lw   $t8, 0($t7)
+
+    # bucket_base
+    mul  $t9, $t5, 48
+    add  $s0, $t3, $t9
+
+    li   $t6, 0        # inner index
+print_elem:
+    beq  $t6, $t8, next_b
+    mul  $t7, $t6, 4
+    add  $s1, $s0, $t7
+    lw   $t9, 0($s1)
+    mtc1 $t9, $f12     # f12 = value
+    li   $v0, 2
+    syscall
+
+    # newline
+    li   $v0, 4
+    la   $a0, newline
+    syscall
+
+    addi $t6, $t6, 1
+    j    print_elem
+
+next_b:
+    addi $t5, $t5, 1
+    j    print_b
+
+end:
+    li   $v0, 10
+    syscall
